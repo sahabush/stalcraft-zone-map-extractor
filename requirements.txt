@@ -1,0 +1,4 @@
+sc-file>=5.1.0
+nbtlib>=2.0.4
+numpy>=1.24
+pillow>=10.0

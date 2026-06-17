@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+maps/_mca_*/
+*.mca
+.venv/
+.DS_Store
+.idea/
+*.iml
