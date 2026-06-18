@@ -6,3 +6,5 @@ maps/_mca_*/
 .DS_Store
 .idea/
 *.iml
+*_calibrated.png
+palette_calibrated.py

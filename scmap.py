@@ -34,7 +34,7 @@ import zlib
 
 import numpy as np
 import nbtlib
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 # --- Minecraft 1.12 block id -> approximate map color -----------------------
 # sc-file's mapcache remaps STALCRAFT blocks to vanilla ids chosen for their
@@ -42,59 +42,31 @@ from PIL import Image
 AIR = {0, 166}      # air + barrier (invisible)
 MARKER = {190}      # the game's invisible boundary/marker layer (sits on roofs
                     # and floats over terrain); never visible to players
-WATER = {8, 9}
+# Real in-game block colours, extracted automatically from the .ol world map
+# (median over ~3.6M sampled pixels across kordon+bar+agroprom+svalka+yantar).
+# See calibrate_from_ol.py. These ARE the game's true map colours per block id.
 PALETTE = {
-    1: (127, 127, 127),   # stone
-    2: (106, 170, 64),    # grass
-    3: (134, 96, 67),     # dirt
-    4: (122, 122, 122),   # cobblestone
-    5: (160, 130, 80),    # planks
-    7: (50, 50, 50),      # bedrock
-    12: (220, 210, 160),  # sand
-    13: (132, 127, 120),  # gravel
-    14: (143, 140, 125),  # gold ore (stone-ish)
-    15: (140, 132, 127),  # iron ore
-    16: (108, 108, 108),  # coal ore
-    17: (104, 83, 50),    # log
-    18: (52, 90, 38),     # leaves
-    20: (200, 220, 225),  # glass
-    24: (214, 205, 150),  # sandstone
-    31: (80, 120, 50),    # tallgrass
-    32: (120, 110, 70),   # deadbush/dry
-    35: (210, 210, 205),  # wool/white
-    37: (190, 175, 50),   # dandelion (yellow accent)
-    38: (170, 75, 60),     # poppy (red accent)
-    43: (160, 160, 160),  # double slab
-    44: (165, 165, 165),  # slab
-    45: (150, 84, 67),    # bricks
-    48: (95, 120, 95),    # mossy cobble
-    49: (28, 24, 38),     # obsidian
-    65: (120, 100, 70),   # ladder
-    82: (160, 166, 180),  # clay
-    83: (95, 150, 70),    # reeds
-    85: (150, 120, 80),   # fence
-    87: (110, 60, 52),    # netherrack (reddish ground)
-    97: (124, 124, 124),  # monster egg (stone)
-    98: (122, 122, 122),  # stone bricks
-    101: (110, 110, 110), # iron bars
-    106: (70, 110, 50),   # vines
-    109: (120, 120, 120), # stone brick stairs
-    110: (118, 100, 118), # mycelium
-    112: (45, 24, 28),    # nether brick
-    113: (150, 120, 80),  # fence
-    189: (190, 175, 150), # birch fence/plank tone
-    190: (110, 95, 60),   # jungle tone
-    191: (90, 70, 45),    # dark oak tone
-    192: (150, 120, 75),  # acacia tone
+    2: (57, 56, 41), 1: (68, 66, 62), 13: (68, 60, 49), 112: (66, 65, 60),
+    18: (115, 117, 115), 9: (54, 44, 35), 12: (82, 69, 57), 97: (66, 63, 57),
+    87: (85, 78, 74), 3: (74, 67, 57), 82: (82, 70, 57), 32: (49, 48, 32),
+    31: (51, 52, 33), 38: (55, 54, 35), 110: (65, 60, 49), 37: (49, 48, 32),
+    189: (66, 61, 57), 58: (99, 101, 96), 49: (68, 64, 57), 83: (49, 48, 30),
+    125: (65, 58, 44), 98: (66, 62, 54), 4: (85, 81, 74), 5: (66, 60, 49),
+    126: (66, 59, 46), 191: (66, 60, 51), 113: (65, 60, 49), 192: (68, 62, 54),
+    101: (57, 52, 41), 44: (126, 125, 123), 41: (126, 127, 126), 48: (126, 128, 126),
+    176: (66, 60, 52), 35: (93, 93, 87), 144: (74, 71, 65), 217: (49, 49, 30),
+    254: (57, 48, 40), 177: (62, 55, 46), 106: (63, 59, 49), 45: (71, 67, 57),
+    29: (83, 72, 49), 17: (62, 55, 49), 39: (65, 65, 38), 188: (66, 65, 61),
+    147: (84, 81, 74), 65: (66, 63, 57), 172: (101, 101, 95), 224: (57, 56, 41),
+    47: (82, 77, 71), 159: (68, 67, 57), 43: (73, 67, 57), 68: (109, 95, 84),
+    42: (57, 56, 38), 36: (32, 34, 27), 46: (99, 81, 66),
 }
-FALLBACK = (138, 134, 126)  # neutral concrete-grey for unmapped (buildings)
+FALLBACK = (78, 74, 68)  # neutral for ids not present in the sampled world map
 
 
 def color_for(bid):
     if bid in AIR:
         return None
-    if bid in WATER:
-        return (58, 92, 170)
     return PALETTE.get(bid, FALLBACK)
 
 
@@ -116,39 +88,52 @@ def iter_chunks(mca_path):
             continue
 
 
+ALIASES = {"roofs": "roof", "xray": "floor2"}
+
+
 def pick_surface(column, ymax, mode):
     """Choose which block represents a column, depending on view mode.
 
     Building structure in the cache looks like:
-        marker(190) -> roof -> walls -> floor -> marker -> air(room) -> ground
+        marker(190) -> roof -> walls -> floor -> [marker] -> air(room) -> ground
 
-    mode 'top'   : raw topmost block, including the invisible marker layer
-                   (shows the marker/contour lines players never see).
-    mode 'roofs' : skip the invisible marker layer only -> real building roofs
-                   and terrain, no marker lines. The normal clean map.
-    mode 'xray'  : also peel roofs/ceilings (anything floating over a room) to
-                   reveal interior floor plans / building layouts.
+    mode 'top'    : raw topmost block, incl. the invisible marker layer (debug).
+    mode 'roof'   : skip the invisible marker only -> real roofs + terrain.
+    mode 'floor2' : peel the roof to the FIRST room from the top -> upper floor.
+    mode 'floor1' : peel down to the LOWEST room -> ground floor plan.
+    (aliases: roofs->roof, xray->floor2)
     """
+    mode = ALIASES.get(mode, mode)
+
     if mode == "top":
         return column[ymax], ymax
 
-    if mode == "roofs":
+    if mode == "roof":
         for wy in range(ymax, -1, -1):
             if wy in column and column[wy] not in MARKER:
                 return column[wy], wy
         return column[ymax], ymax
 
-    # xray: descend through the top solid superstructure (marker + roof + walls)
-    # until the first room (air gap), then return the floor just below it. This
-    # exposes the interior floor plan. Terrain columns (solid all the way) have
-    # no room, so the surface is returned unchanged.
-    y = ymax
-    while y >= 0 and y in column:      # skip roof / walls / markers (the cap)
-        y -= 1
-    while y >= 0 and y not in column:  # skip the room (air)
-        y -= 1
-    if y >= 0:                          # floor of the topmost room
-        return column[y], y
+    if mode == "floor2":
+        # descend through the top cap (roof/walls/markers), skip the first room,
+        # return the floor below it (upper interior floor).
+        y = ymax
+        while y >= 0 and y in column:
+            y -= 1
+        while y >= 0 and y not in column:
+            y -= 1
+        return (column[y], y) if y >= 0 else (column[ymax], ymax)
+
+    # floor1: the ground floor = the solid surface just below the LOWEST room.
+    # Scan up from the bottom: foundation solids, then the first air (room),
+    # and return the last solid before that room.
+    ymin = min(column)
+    y = ymin
+    while y in column:                 # rise through the foundation/ground floor
+        y += 1
+    floor = y - 1                       # last solid before the first room above
+    if floor in column:
+        return column[floor], floor
     return column[ymax], ymax
 
 
@@ -222,10 +207,13 @@ def label_clusters(occ, cell=16, gap=2):
     return boxes
 
 
-def render(cols):
-    xs = [c[0] for c in cols]
-    zs = [c[1] for c in cols]
-    minx, maxx, minz, maxz = min(xs), max(xs), min(zs), max(zs)
+def render(cols, bbox=None):
+    if bbox is None:
+        xs = [c[0] for c in cols]
+        zs = [c[1] for c in cols]
+        minx, maxx, minz, maxz = min(xs), max(xs), min(zs), max(zs)
+    else:
+        minx, minz, maxx, maxz = bbox
     W, H = maxx - minx + 1, maxz - minz + 1
     img = np.zeros((H, W, 3), np.uint8)
     hgt = np.full((H, W), np.nan, np.float32)
@@ -235,6 +223,8 @@ def render(cols):
         if c is None:
             continue
         px, pz = wx - minx, wz - minz
+        if not (0 <= px < W and 0 <= pz < H):
+            continue
         img[pz, px] = c
         hgt[pz, px] = y
         occ[pz, px] = True
@@ -258,11 +248,29 @@ def main():
                     help="ignore clusters smaller than this many pixels")
     ap.add_argument("-s", "--scale", type=int, default=1,
                     help="pixels per block (nearest-neighbour upscale; keeps zoom crisp)")
-    ap.add_argument("-m", "--mode", choices=["roofs", "xray", "top"], default="roofs",
-                    help="roofs: normal map with building roofs, marker layer removed "
-                         "(default). xray: peel roofs to reveal interior floor plans. "
-                         "top: raw topmost block incl. the invisible marker lines.")
+    ap.add_argument("-m", "--mode",
+                    choices=["roof", "floor2", "floor1", "all", "roofs", "xray", "top"],
+                    default="roof",
+                    help="roof: normal map with building roofs (default). "
+                         "floor2: upper interior floor. floor1: ground floor plan. "
+                         "all: render roof+floor2+floor1 aligned (for layer overlays). "
+                         "top: raw topmost incl. invisible marker. "
+                         "(roofs=roof, xray=floor2)")
+    ap.add_argument("--saturation", type=float, default=1.5,
+                    help="colour intensity (1.0 = raw extracted/dull, >1 livelier)")
+    ap.add_argument("--brightness", type=float, default=1.12,
+                    help="brightness multiplier")
+    ap.add_argument("--contrast", type=float, default=1.06, help="contrast multiplier")
+    ap.add_argument("--palette", default="",
+                    help="python file defining PALETTE = {id: (r,g,b)} to override colours "
+                         "(e.g. palette_ol.py extracted from the real .ol world map)")
     args = ap.parse_args()
+
+    if args.palette:
+        ns = {}
+        exec(open(args.palette, encoding="utf-8").read(), ns)
+        PALETTE.update(ns["PALETTE"])
+        print(f"      palette override: {len(ns['PALETTE'])} colours from {args.palette}")
 
     name = os.path.basename(os.path.normpath(args.location))
     os.makedirs(args.output, exist_ok=True)
@@ -273,35 +281,50 @@ def main():
     subprocess.run([sys.executable, "-m", "scfile", "mapcache", args.location, "-O", mca_dir],
                    check=True)
 
-    print(f"[2/3] reading blocks (mode={args.mode})")
-    cols = collect_columns(mca_dir, mode=args.mode)
-    if not cols:
-        print("no block data found"); return
-    img, occ = render(cols)
+    layers = ["roof", "floor2", "floor1"] if args.mode == "all" else [ALIASES.get(args.mode, args.mode)]
 
     def save(arr, path):
         im = Image.fromarray(arr)
+        if args.saturation != 1.0:
+            im = ImageEnhance.Color(im).enhance(args.saturation)
+        if args.brightness != 1.0:
+            im = ImageEnhance.Brightness(im).enhance(args.brightness)
+        if args.contrast != 1.0:
+            im = ImageEnhance.Contrast(im).enhance(args.contrast)
         if args.scale > 1:
             im = im.resize((im.width * args.scale, im.height * args.scale), Image.NEAREST)
         im.save(path)
 
-    suffix = "" if args.mode == "roofs" else f"_{args.mode}"
-    print("[3/3] splitting cached areas & saving")
-    boxes = [b for b in label_clusters(occ)
+    # shared geometry: bbox + split boxes are taken from the 'roof' layer (the
+    # fullest), so every layer of an arena lines up pixel-for-pixel.
+    print("[2/3] computing shared geometry (roof)")
+    roof_cols = collect_columns(mca_dir, mode="roof")
+    if not roof_cols:
+        print("no block data found"); return
+    xs = [c[0] for c in roof_cols]; zs = [c[1] for c in roof_cols]
+    bbox = (min(xs), min(zs), max(xs), max(zs))
+    _, roof_occ = render(roof_cols, bbox)
+    boxes = [b for b in label_clusters(roof_occ)
              if (b[2] - b[0]) * (b[3] - b[1]) >= args.min_area
-             and occ[b[1]:b[3], b[0]:b[2]].any()]
-    if len(boxes) <= 1:
-        out = os.path.join(args.output, f"{name}{suffix}.png")
-        save(img, out)
-        print("  saved", out, f"({img.shape[1]}x{img.shape[0]} blocks, scale x{args.scale})")
-    else:
-        for i, (x0, z0, x1, z1) in enumerate(boxes, 1):
-            crop = img[z0:z1, x0:x1]
-            filled = int(occ[z0:z1, x0:x1].sum())
-            out = os.path.join(args.output, f"{name}_part{i}{suffix}.png")
-            save(crop, out)
-            print(f"  saved {out}  ({crop.shape[1]}x{crop.shape[0]} blocks, {filled} filled)")
-        print(f"  note: {len(boxes)} disconnected cached areas (e.g. same arena cached twice).")
+             and roof_occ[b[1]:b[3], b[0]:b[2]].any()]
+    if len(boxes) > 1:
+        print(f"      {len(boxes)} disconnected cached areas -> _partN")
+
+    print(f"[3/3] rendering layers: {', '.join(layers)}")
+    single = (len(layers) == 1)
+    for layer in layers:
+        cols = roof_cols if layer == "roof" else collect_columns(mca_dir, mode=layer)
+        img, _ = render(cols, bbox)
+        suffix = "" if (single and layer == "roof") else f"_{layer}"
+        if len(boxes) <= 1:
+            out = os.path.join(args.output, f"{name}{suffix}.png")
+            save(img, out)
+            print("  saved", out, f"({img.shape[1]}x{img.shape[0]} blocks, x{args.scale})")
+        else:
+            for i, (x0, z0, x1, z1) in enumerate(boxes, 1):
+                out = os.path.join(args.output, f"{name}_part{i}{suffix}.png")
+                save(img[z0:z1, x0:x1], out)
+                print(f"  saved {out}  ({x1-x0}x{z1-z0} blocks)")
     print("done.")
 
 

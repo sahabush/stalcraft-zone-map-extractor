@@ -43,10 +43,13 @@ class App:
         # --- options ---
         opt = ttk.LabelFrame(root, text="2. Настройки")
         opt.pack(fill="x", **pad)
-        self.mode = tk.StringVar(value="roofs")
+        self.mode = tk.StringVar(value="roof")
         ttk.Label(opt, text="Режим:").grid(row=0, column=0, sticky="w", padx=8, pady=8)
-        ttk.Radiobutton(opt, text="roofs (карта с крышами)", variable=self.mode, value="roofs").grid(row=0, column=1, sticky="w")
-        ttk.Radiobutton(opt, text="xray (планировка зданий)", variable=self.mode, value="xray").grid(row=0, column=2, sticky="w")
+        modes = [("roof — крыши", "roof"), ("floor2 — 2 этаж", "floor2"),
+                 ("floor1 — 1 этаж", "floor1"), ("all — все 3 слоя", "all")]
+        for i, (label, val) in enumerate(modes):
+            ttk.Radiobutton(opt, text=label, variable=self.mode, value=val).grid(
+                row=0, column=1 + i, sticky="w")
         ttk.Label(opt, text="Масштаб (px/блок):").grid(row=1, column=0, sticky="w", padx=8, pady=8)
         self.scale = tk.IntVar(value=3)
         ttk.Spinbox(opt, from_=1, to=10, width=5, textvariable=self.scale).grid(row=1, column=1, sticky="w")
