@@ -60,8 +60,10 @@ class App:
         btns.pack(fill="x", **pad)
         self.btn_deps = ttk.Button(btns, text="Установить зависимости", command=self.install_deps)
         self.btn_deps.pack(side="left", padx=8)
-        self.btn_run = ttk.Button(btns, text="Создать карту", command=self.run_render)
+        self.btn_run = ttk.Button(btns, text="Создать карту 2D", command=self.run_render)
         self.btn_run.pack(side="left", padx=8)
+        self.btn_3d = ttk.Button(btns, text="Создать 3D (.glb)", command=self.run_3d)
+        self.btn_3d.pack(side="left", padx=8)
         self.btn_open = ttk.Button(btns, text="Открыть результаты", command=self.open_out)
         self.btn_open.pack(side="left", padx=8)
 
@@ -93,7 +95,7 @@ class App:
     def set_busy(self, busy):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for b in (self.btn_deps, self.btn_run):
+        for b in (self.btn_deps, self.btn_run, self.btn_3d):
             b["state"] = state
 
     def browse(self):
@@ -143,6 +145,19 @@ class App:
         self.run_proc([sys.executable, SCMAP, path, "-o", self.outdir,
                        "-m", self.mode.get(), "-s", str(self.scale.get())],
                       "Карта готова. Нажмите «Открыть результаты».")
+
+    def run_3d(self):
+        if self.busy:
+            return
+        path = self.path_var.get().strip()
+        if not path or not os.path.isdir(path):
+            self.write("\n! Сначала укажите существующую папку локации.\n")
+            return
+        name = os.path.basename(os.path.normpath(path))
+        out = os.path.join(HERE, "3d", f"{name}.glb")
+        self.write(f"\n>>> 3D-модель: {name} -> 3d/{name}.glb (может занять минуту-две)\n")
+        self.run_proc([sys.executable, os.path.join(HERE, "3d", "voxel_to_glb.py"), path, "-o", out],
+                      "3D готово. Открой 3d/viewer.html в браузере.")
 
 
 if __name__ == "__main__":

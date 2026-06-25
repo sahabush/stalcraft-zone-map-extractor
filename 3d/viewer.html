@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STALCRAFT 3D map viewer</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e1108;overflow:hidden;font-family:system-ui,sans-serif}
+  #info{position:fixed;left:12px;top:10px;color:#cfc8a8;font-size:13px;line-height:1.5;
+        background:rgba(20,24,14,.7);padding:8px 12px;border-radius:6px;pointer-events:none;z-index:10}
+  #info b{color:#EE9A3C}
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#cfc8a8;font-size:18px}
+  kbd{background:#2b3020;border:1px solid #3a3f2d;border-radius:3px;padding:0 5px;color:#eae6d8}
+</style>
+</head>
+<body>
+  <div id="loading">Загрузка модели…</div>
+  <div id="info">
+    <b>STALCRAFT 3D — карта</b><br>
+    Мышь — вращать · колесо — зум · ПКМ — сдвиг<br>
+    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> — полёт · <kbd>Q</kbd>/<kbd>E</kbd> — вниз/вверх · <kbd>Shift</kbd> — быстрее
+  </div>
+
+  <script type="importmap">
+  { "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  } }
+  </script>
+
+  <script type="module">
+  import * as THREE from "three";
+  import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+  const MODEL = new URLSearchParams(location.search).get("map") || "small_berdovka.glb";
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x10140b);
+  scene.fog = new THREE.Fog(0x10140b, 400, 1600);
+  const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.5, 8000);
+
+  scene.add(new THREE.HemisphereLight(0xbfcfe0, 0x2a2c1e, 1.05));
+  const sun = new THREE.DirectionalLight(0xfff2d6, 1.15);
+  sun.position.set(0.5, 1, 0.3); scene.add(sun);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+
+  new GLTFLoader().load(MODEL, (gltf) => {
+    const model = gltf.scene;
+    model.traverse((o) => { if (o.isMesh) {
+      o.material.vertexColors = true; o.material.metalness = 0; o.material.roughness = 1;
+      o.material.side = THREE.DoubleSide; o.material.flatShading = true;
+    }});
+    scene.add(model);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+    model.position.sub(center);
+    const radius = Math.max(size.x, size.z);
+    camera.position.set(0, size.y * 1.6 + radius * 0.4, radius * 0.75);
+    camera.lookAt(0, 0, 0); controls.target.set(0, 0, 0); controls.update();
+    document.getElementById("loading").remove();
+  }, (e) => {
+    const p = e.total ? Math.round(e.loaded / e.total * 100) : 0;
+    document.getElementById("loading").textContent = `Загрузка модели… ${p}%`;
+  }, (err) => { document.getElementById("loading").textContent = "Ошибка загрузки: " + err; });
+
+  const keys = {};
+  addEventListener("keydown", (e) => keys[e.code] = true);
+  addEventListener("keyup", (e) => keys[e.code] = false);
+  const fwd = new THREE.Vector3(), right = new THREE.Vector3();
+  function fly(dt) {
+    const sp = (keys["ShiftLeft"] ? 320 : 110) * dt;
+    camera.getWorldDirection(fwd); fwd.normalize();
+    right.crossVectors(fwd, camera.up).normalize();
+    const m = new THREE.Vector3();
+    if (keys["KeyW"]) m.add(fwd); if (keys["KeyS"]) m.addScaledVector(fwd, -1);
+    if (keys["KeyD"]) m.add(right); if (keys["KeyA"]) m.addScaledVector(right, -1);
+    if (keys["KeyE"]) m.y += 1; if (keys["KeyQ"]) m.y -= 1;
+    if (m.lengthSq() > 0) { m.normalize().multiplyScalar(sp); camera.position.add(m); controls.target.add(m); }
+  }
+
+  addEventListener("resize", () => {
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  let last = performance.now();
+  renderer.setAnimationLoop(() => {
+    const now = performance.now(), dt = (now - last) / 1000; last = now;
+    fly(dt); controls.update(); renderer.render(scene, camera);
+  });
+  </script>
+</body>
+</html>
